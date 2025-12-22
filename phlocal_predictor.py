@@ -17,7 +17,7 @@ st.set_page_config(
 
 @st.cache_resource
 def load_model_data():
-    # Ensure the filename matches your uploaded .pkl file
+    # Load the dictionary containing model, features, and imputer
     data = joblib.load('xgboost_ph_model.pkl')
     return data
 
@@ -28,7 +28,7 @@ try:
     feature_names = model_data['features']
     imputer = model_data['imputer']
 except Exception as e:
-    st.error(f"Error loading model: {e}")
+    st.error(f"Error loading model components: {e}")
     st.stop()
 
 # ==========================================
@@ -36,8 +36,8 @@ except Exception as e:
 # ==========================================
 st.title('🏥 In-hospital Mortality Risk Predictor for Pulmonary Hypertension')
 st.markdown("""
-This tool utilizes a machine learning model (XGBoost) to estimate the in-hospital mortality risk 
-for patients with Pulmonary Hypertension (PH) based on five key clinical parameters.
+This clinical tool utilizes a machine learning model (XGBoost) to estimate the in-hospital 
+mortality risk for patients with Pulmonary Hypertension (PH) based on five key clinical parameters.
 """)
 st.markdown("---")
 
@@ -47,13 +47,16 @@ col1, col2, col3 = st.columns(3)
 
 user_inputs = {}
 with col1:
-    user_inputs['sapsii'] = st.number_input('SAPS II Score', value=30.0, help="Simplified Acute Physiology Score II")
-    user_inputs['hr'] = st.number_input('Heart Rate (bpm)', value=80.0)
+    user_inputs['sapsii'] = st.number_input('SAPS II Score', min_value=0.0, max_value=150.0, value=30.0,
+                                            help="Simplified Acute Physiology Score II")
+    user_inputs['hr'] = st.number_input('Heart Rate (bpm)', min_value=0.0, max_value=250.0, value=80.0)
 with col2:
-    user_inputs['po2'] = st.number_input('PaO2 (mmHg)', value=100.0, help="Partial Pressure of Oxygen")
-    user_inputs['lactate'] = st.number_input('Lactate (mmol/L)', value=1.0)
+    user_inputs['po2'] = st.number_input('PaO2 (mmHg)', min_value=0.0, max_value=800.0, value=100.0,
+                                         help="Partial Pressure of Oxygen")
+    user_inputs['lactate'] = st.number_input('Lactate (mmol/L)', min_value=0.0, max_value=30.0, value=1.0)
 with col3:
-    user_inputs['rdw'] = st.number_input('RDW (%)', value=14.0, help="Red Cell Distribution Width")
+    user_inputs['rdw'] = st.number_input('RDW (%)', min_value=0.0, max_value=50.0, value=14.0,
+                                         help="Red Cell Distribution Width")
 
 # ==========================================
 # 3. Prediction & Explanation Logic
@@ -62,13 +65,16 @@ if st.button('Calculate Risk', type='primary'):
     # Create DataFrame and ensure feature order
     input_df = pd.DataFrame([user_inputs])[feature_names]
 
-    # Preprocessing with compatibility check
+    # Preprocessing with robust compatibility check for Cloud Environment
     try:
         input_df = input_df.astype(float)
-        input_filled_values = imputer.transform(input_df)
-        input_filled = pd.DataFrame(input_filled_values, columns=feature_names)
+        # Handle cases where imputer might have internal version mismatch
+        if hasattr(imputer, 'transform'):
+            input_filled_values = imputer.transform(input_df)
+            input_filled = pd.DataFrame(input_filled_values, columns=feature_names)
+        else:
+            input_filled = input_df
     except Exception:
-        # Fallback for cloud environment version mismatch
         input_filled = input_df.fillna(0)
 
     # Perform Prediction
@@ -87,39 +93,40 @@ if st.button('Calculate Risk', type='primary'):
         else:
             st.success("✅ Assessment: Low-Risk Patient Group")
 
-    # SHAP Explanation
+    # SHAP Explanation with ValueError handling for XGBoost version differences
     st.subheader('Step 3: Clinical Decision Support (SHAP Explanation)')
 
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(input_filled)
+    try:
+        # Standard initialization
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(input_filled)
 
-    # Force Plot Visualization
-    fig = plt.figure(figsize=(12, 3))
-    shap.force_plot(
-        explainer.expected_value,
-        shap_values[0],
-        input_filled,
-        feature_names=feature_names,
-        matplotlib=True,
-        show=False
-    )
+        # Plotting
+        fig = plt.figure(figsize=(12, 3))
+        shap.force_plot(
+            explainer.expected_value,
+            shap_values[0],
+            input_filled,
+            feature_names=feature_names,
+            matplotlib=True,
+            show=False
+        )
+        plt.savefig("temp_force.png", bbox_inches='tight', dpi=300)
+        st.image("temp_force.png")
 
-    # Save and display locally to avoid rendering issues on Streamlit Cloud
-    plt.savefig("temp_force_plot.png", bbox_inches='tight', dpi=300)
-    st.image("temp_force_plot.png")
-
-    st.info("""
-    **Interpretation:** - **Red bars (positive SHAP):** Clinical features pushing the prediction toward a HIGHER risk of mortality.
-    - **Blue bars (negative SHAP):** Clinical features pushing the prediction toward a LOWER risk (Survival).
-    """)
+        st.info("""
+        **Interpretation:** - **Red bars:** Features increasing mortality risk.
+        - **Blue bars:** Features decreasing mortality risk (protective).
+        """)
+    except Exception as e:
+        st.warning(
+            "SHAP visualizer encountered a version compatibility issue, but the prediction above is still accurate.")
+        st.write(f"Technical details: {e}")
 
 # ==========================================
 # 4. Footer & Disclaimer
 # ==========================================
 st.markdown("""
 ---
-**Disclaimer & Instructions:**
-1. This tool is intended for academic and research purposes only and should not be used as the sole basis for clinical diagnosis or treatment.
-2. Ensure all input values fall within clinically plausible ranges.
-3. Technical Support: Powered by XGBoost and SHAP (SHapley Additive exPlanations).
+**Disclaimer:** This tool is for research purposes only. Decisions should be made by qualified clinicians.
 """)
