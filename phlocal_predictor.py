@@ -4,7 +4,7 @@ import numpy as np
 import joblib
 import shap
 import matplotlib.pyplot as plt
-import xgboost as xgb  # 新增：用于底层预测补丁
+import xgboost as xgb
 
 # ==========================================
 # 1. Configuration & Model Loading
@@ -63,7 +63,7 @@ if st.button('Calculate Risk', type='primary'):
     # Create DataFrame and ensure feature order
     input_df = pd.DataFrame([user_inputs])[feature_names]
 
-    # Preprocessing with robust compatibility check
+    # Preprocessing
     try:
         input_df = input_df.astype(float)
         if hasattr(imputer, 'transform'):
@@ -74,23 +74,20 @@ if st.button('Calculate Risk', type='primary'):
     except Exception:
         input_filled = input_df.fillna(0)
 
-    # Perform Prediction with version compatibility patch
+    # Prediction Logic with Fallback
     prediction_prob = 0.0
     try:
-        # Standard Sklearn-API call
         prediction_prob = model.predict_proba(input_filled)[0][1]
     except Exception:
         try:
-            # Fallback: Directly use Booster for Python 3.12/3.13 compatibility
             dmat = xgb.DMatrix(input_filled)
-            # If the booster returns 1D array of probabilities
             raw_pred = model.get_booster().predict(dmat)
             prediction_prob = float(raw_pred[0])
         except Exception as e_final:
-            st.error(f"Critical Prediction Error: {e_final}")
+            st.error(f"Prediction Error: {e_final}")
             st.stop()
 
-    # Display Results
+    # Results Display
     st.markdown("---")
     st.header('Step 2: Risk Assessment Analysis')
 
@@ -103,17 +100,25 @@ if st.button('Calculate Risk', type='primary'):
         else:
             st.success("✅ Assessment: Low-Risk Patient Group")
 
-    # SHAP Explanation
+    # SHAP Explanation (Version-Safe Logic)
     st.subheader('Step 3: Clinical Decision Support (SHAP Explanation)')
 
     try:
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(input_filled)
 
+        # Handle different SHAP output formats (list vs array)
+        if isinstance(shap_values, list):
+            # For multi-class/probability outputs, index 1 is usually the positive class
+            display_shap = shap_values[1][0] if len(shap_values) > 1 else shap_values[0][0]
+        else:
+            display_shap = shap_values[0]
+
         fig = plt.figure(figsize=(12, 3))
         shap.force_plot(
-            explainer.expected_value,
-            shap_values[0] if isinstance(shap_values, list) else shap_values[0],
+            explainer.expected_value[1] if isinstance(explainer.expected_value,
+                                                      (list, np.ndarray)) else explainer.expected_value,
+            display_shap,
             input_filled,
             feature_names=feature_names,
             matplotlib=True,
@@ -121,13 +126,10 @@ if st.button('Calculate Risk', type='primary'):
         )
         plt.savefig("temp_force.png", bbox_inches='tight', dpi=300)
         st.image("temp_force.png")
-
-        st.info("**Interpretation:** Red bars increase risk, Blue bars decrease risk.")
+        st.info("**Interpretation:** Features in **red** increase mortality risk, while **blue** features decrease it.")
     except Exception as e:
-        st.warning("Prediction is successful, but SHAP visualizer encountered a version issue.")
+        st.warning("Prediction complete. SHAP visualization skipped due to environment limits.")
+        # st.write(f"Debug: {e}") # Uncomment to see error details if needed
 
-# ==========================================
-# 4. Footer
-# ==========================================
 st.markdown("---")
-st.caption("For Research Purposes Only.")
+st.caption("Disclaimer: Academic Research Use Only.")
