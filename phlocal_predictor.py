@@ -7,63 +7,56 @@ import matplotlib.pyplot as plt
 import xgboost as xgb
 
 # ==========================================
-# 1. Configuration & Model Loading
+# 1. Page Configuration
 # ==========================================
-st.set_page_config(
-    page_title="PH Mortality Predictor",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Mortality Prediction", layout="centered")
 
 
+# ==========================================
+# 2. Model Loading
+# ==========================================
 @st.cache_resource
 def load_model_data():
-    # Load the dictionary containing model, features, and imputer
-    data = joblib.load('xgboost_ph_model.pkl')
-    return data
+    try:
+        return joblib.load('xgboost_ph_model.pkl')
+    except Exception as e:
+        st.error(f"Error loading model file: {e}")
+        return None
 
 
-try:
-    model_data = load_model_data()
+model_data = load_model_data()
+if model_data:
     model = model_data['model']
     feature_names = model_data['features']
     imputer = model_data['imputer']
-except Exception as e:
-    st.error(f"Error loading model components: {e}")
+else:
     st.stop()
 
 # ==========================================
-# 2. UI Design (English)
+# 3. UI Layout (Matches your Screenshot)
 # ==========================================
-st.title('🏥 In-hospital Mortality Risk Predictor for Pulmonary Hypertension')
-st.markdown("""
-This clinical tool utilizes a machine learning model (XGBoost) to estimate the in-hospital 
-mortality risk for patients with Pulmonary Hypertension (PH) based on five key clinical parameters.
-""")
-st.markdown("---")
+st.markdown("## Please enter patient information:")
 
-# Input Section
-st.header('Step 1: Patient Clinical Information')
-col1, col2, col3 = st.columns(3)
-
+# Vertical Layout (As seen in the image)
 user_inputs = {}
-with col1:
-    user_inputs['sapsii'] = st.number_input('SAPS II Score', min_value=0.0, max_value=150.0, value=30.0)
-    user_inputs['hr'] = st.number_input('Heart Rate (bpm)', min_value=0.0, max_value=250.0, value=80.0)
-with col2:
-    user_inputs['po2'] = st.number_input('PaO2 (mmHg)', min_value=0.0, max_value=800.0, value=100.0)
-    user_inputs['lactate'] = st.number_input('Lactate (mmol/L)', min_value=0.0, max_value=30.0, value=1.0)
-with col3:
-    user_inputs['rdw'] = st.number_input('RDW (%)', min_value=0.0, max_value=50.0, value=14.0)
+
+# Ensure the keys match what the model expects, but labels match your image
+user_inputs['sapsii'] = st.number_input("Enter SAPSII:", value=10.0)
+user_inputs['hr'] = st.number_input("Enter HR:", value=60.0)
+user_inputs['po2'] = st.number_input("Enter PO2:", value=100.0)
+user_inputs['lactate'] = st.number_input("Enter Lactate:", value=17.0)
+user_inputs['rdw'] = st.number_input("Enter RDW:", value=15.0)
+
+st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
 
 # ==========================================
-# 3. Prediction & Explanation Logic
+# 4. Prediction Logic
 # ==========================================
-if st.button('Calculate Risk', type='primary'):
-    # Create DataFrame and ensure feature order
+if st.button('Predict'):
+    # Prepare data
     input_df = pd.DataFrame([user_inputs])[feature_names]
 
-    # Preprocessing
+    # Preprocessing (Safe mode)
     try:
         input_df = input_df.astype(float)
         if hasattr(imputer, 'transform'):
@@ -71,65 +64,72 @@ if st.button('Calculate Risk', type='primary'):
             input_filled = pd.DataFrame(input_filled_values, columns=feature_names)
         else:
             input_filled = input_df
-    except Exception:
+    except:
         input_filled = input_df.fillna(0)
 
-    # Prediction Logic with Fallback
-    prediction_prob = 0.0
+    # Prediction (Robust mode)
     try:
         prediction_prob = model.predict_proba(input_filled)[0][1]
-    except Exception:
+    except:
         try:
             dmat = xgb.DMatrix(input_filled)
-            raw_pred = model.get_booster().predict(dmat)
-            prediction_prob = float(raw_pred[0])
-        except Exception as e_final:
-            st.error(f"Prediction Error: {e_final}")
+            prediction_prob = float(model.get_booster().predict(dmat)[0])
+        except Exception as e:
+            st.error(f"Prediction Error: {e}")
             st.stop()
 
-    # Results Display
+    # ==========================================
+    # 5. Display Result (Large Font)
+    # ==========================================
     st.markdown("---")
-    st.header('Step 2: Risk Assessment Analysis')
+    st.header("Prediction Result:")
 
-    m1, m2 = st.columns(2)
-    with m1:
-        st.metric(label="Predicted Mortality Probability", value=f"{prediction_prob:.2%}")
-    with m2:
-        if prediction_prob > 0.5:
-            st.error("⚠️ Assessment: High-Risk Patient Group")
-        else:
-            st.success("✅ Assessment: Low-Risk Patient Group")
+    # Custom HTML to enlarge the font significantly
+    result_text = f"In-hospital mortality probability: {prediction_prob:.2%}"
+    st.markdown(f"""
+        <div style='
+            font-size: 30px; 
+            font-weight: bold; 
+            color: #333333; 
+            background-color: #f0f2f6; 
+            padding: 20px; 
+            border-radius: 10px;
+            margin-bottom: 20px;'>
+            {result_text}
+        </div>
+    """, unsafe_allow_html=True)
 
-    # SHAP Explanation (Version-Safe Logic)
-    st.subheader('Step 3: Clinical Decision Support (SHAP Explanation)')
+    # ==========================================
+    # 6. SHAP Force Plot
+    # ==========================================
+    st.header("SHAP Force Plot:")
 
     try:
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(input_filled)
 
-        # Handle different SHAP output formats (list vs array)
+        # Compatibility check for SHAP output type
         if isinstance(shap_values, list):
-            # For multi-class/probability outputs, index 1 is usually the positive class
-            display_shap = shap_values[1][0] if len(shap_values) > 1 else shap_values[0][0]
+            vals = shap_values[1][0] if len(shap_values) > 1 else shap_values[0][0]
         else:
-            display_shap = shap_values[0]
+            vals = shap_values[0]
 
-        fig = plt.figure(figsize=(12, 3))
+        # Generate plot
+        plt.figure(figsize=(20, 3))  # Wider figure to match screenshot
         shap.force_plot(
             explainer.expected_value[1] if isinstance(explainer.expected_value,
                                                       (list, np.ndarray)) else explainer.expected_value,
-            display_shap,
+            vals,
             input_filled,
             feature_names=feature_names,
             matplotlib=True,
-            show=False
+            show=False,
+            text_rotation=0
         )
-        plt.savefig("temp_force.png", bbox_inches='tight', dpi=300)
-        st.image("temp_force.png")
-        st.info("**Interpretation:** Features in **red** increase mortality risk, while **blue** features decrease it.")
-    except Exception as e:
-        st.warning("Prediction complete. SHAP visualization skipped due to environment limits.")
-        # st.write(f"Debug: {e}") # Uncomment to see error details if needed
 
-st.markdown("---")
-st.caption("Disclaimer: Academic Research Use Only.")
+        # Save and display
+        plt.savefig("temp_force_plot.png", bbox_inches='tight', dpi=300)
+        st.image("temp_force_plot.png", use_container_width=True)
+
+    except Exception as e:
+        st.warning("SHAP plot could not be generated due to version limits, but prediction is valid.")
