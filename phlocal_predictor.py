@@ -1,84 +1,99 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib  # 之前保存用的是joblib，加载也建议用joblib
+import joblib
 import shap
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. 配置与模型加载
+# 1. Configuration & Model Loading
 # ==========================================
-st.set_page_config(page_title="PH Mortality Predictor", layout="wide")
+st.set_page_config(
+    page_title="PH Mortality Predictor",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 
 @st.cache_resource
 def load_model_data():
-    # 注意：文件名必须与你保存的一致
+    # Ensure the filename matches your uploaded .pkl file
     data = joblib.load('xgboost_ph_model.pkl')
     return data
 
 
-model_data = load_model_data()
-model = model_data['model']
-# 自动从保存的文件中获取训练时的特征顺序（['sapsii', 'hr', 'po2', 'lactate', 'rdw']）
-feature_names = model_data['features']
-imputer = model_data['imputer']
+try:
+    model_data = load_model_data()
+    model = model_data['model']
+    feature_names = model_data['features']
+    imputer = model_data['imputer']
+except Exception as e:
+    st.error(f"Error loading model: {e}")
+    st.stop()
 
 # ==========================================
-# 2. 界面设计
+# 2. UI Design (English)
 # ==========================================
-st.title('🏥 肺动脉高压院内死亡率预测工具')
+st.title('🏥 In-hospital Mortality Risk Predictor for Pulmonary Hypertension')
+st.markdown("""
+This tool utilizes a machine learning model (XGBoost) to estimate the in-hospital mortality risk 
+for patients with Pulmonary Hypertension (PH) based on five key clinical parameters.
+""")
 st.markdown("---")
 
-# 使用列布局美化输入框
-st.header('第一步：请输入患者临床信息')
+# Input Section
+st.header('Step 1: Patient Clinical Information')
 col1, col2, col3 = st.columns(3)
 
 user_inputs = {}
 with col1:
-    user_inputs['sapsii'] = st.number_input('SAPS II 评分', value=30.0, help="简化急性生理学评分")
-    user_inputs['hr'] = st.number_input('心率 (bpm)', value=80.0)
+    user_inputs['sapsii'] = st.number_input('SAPS II Score', value=30.0, help="Simplified Acute Physiology Score II")
+    user_inputs['hr'] = st.number_input('Heart Rate (bpm)', value=80.0)
 with col2:
-    user_inputs['po2'] = st.number_input('氧分压 PO2 (mmHg)', value=100.0)
-    user_inputs['lactate'] = st.number_input('乳酸 Lactate (mmol/L)', value=1.0)
+    user_inputs['po2'] = st.number_input('PaO2 (mmHg)', value=100.0, help="Partial Pressure of Oxygen")
+    user_inputs['lactate'] = st.number_input('Lactate (mmol/L)', value=1.0)
 with col3:
-    user_inputs['rdw'] = st.number_input('红细胞分布宽度 RDW (%)', value=14.0)
+    user_inputs['rdw'] = st.number_input('RDW (%)', value=14.0, help="Red Cell Distribution Width")
 
 # ==========================================
-# 3. 预测逻辑
+# 3. Prediction & Explanation Logic
 # ==========================================
-if st.button('开始计算风险', type='primary'):
-    # 1. 转换为DataFrame并确保特征顺序严格一致
+if st.button('Calculate Risk', type='primary'):
+    # Create DataFrame and ensure feature order
     input_df = pd.DataFrame([user_inputs])[feature_names]
 
-    # 2. 缺失值填充（使用保存好的训练集均值）
-    input_filled = pd.DataFrame(imputer.transform(input_df), columns=feature_names)
+    # Preprocessing with compatibility check
+    try:
+        input_df = input_df.astype(float)
+        input_filled_values = imputer.transform(input_df)
+        input_filled = pd.DataFrame(input_filled_values, columns=feature_names)
+    except Exception:
+        # Fallback for cloud environment version mismatch
+        input_filled = input_df.fillna(0)
 
-    # 3. 进行预测
+    # Perform Prediction
     prediction_prob = model.predict_proba(input_filled)[0][1]
 
-    # 4. 显示结果
+    # Display Results
     st.markdown("---")
-    st.header('第二步：预测结果分析')
+    st.header('Step 2: Risk Assessment Analysis')
 
     m1, m2 = st.columns(2)
     with m1:
-        st.metric(label="预测院内死亡概率", value=f"{prediction_prob:.2%}")
+        st.metric(label="Predicted Mortality Probability", value=f"{prediction_prob:.2%}")
     with m2:
         if prediction_prob > 0.5:
-            st.error("⚠️ 判定：高风险患者")
+            st.error("⚠️ Assessment: High-Risk Patient Group")
         else:
-            st.success("✅ 判定：低风险患者")
+            st.success("✅ Assessment: Low-Risk Patient Group")
 
-    # 5. SHAP 解释
-    st.subheader('第三步：SHAP 临床决策支持（可视化解释）')
+    # SHAP Explanation
+    st.subheader('Step 3: Clinical Decision Support (SHAP Explanation)')
 
-    # 计算SHAP值
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(input_filled)
 
-    # 绘制SHAP力图 (Force Plot)
-    # 注意：matplotlib模式下不需要 initjs
+    # Force Plot Visualization
     fig = plt.figure(figsize=(12, 3))
     shap.force_plot(
         explainer.expected_value,
@@ -88,19 +103,23 @@ if st.button('开始计算风险', type='primary'):
         matplotlib=True,
         show=False
     )
-    # 自动保存并显示，解决Streamlit直接渲染shap图表的兼容性问题
+
+    # Save and display locally to avoid rendering issues on Streamlit Cloud
     plt.savefig("temp_force_plot.png", bbox_inches='tight', dpi=300)
     st.image("temp_force_plot.png")
 
-    st.info("解释：红色代表推高死亡风险的因素，蓝色代表降低风险的因素。")
+    st.info("""
+    **Interpretation:** - **Red bars (positive SHAP):** Clinical features pushing the prediction toward a HIGHER risk of mortality.
+    - **Blue bars (negative SHAP):** Clinical features pushing the prediction toward a LOWER risk (Survival).
+    """)
 
 # ==========================================
-# 4. 页脚说明
+# 4. Footer & Disclaimer
 # ==========================================
 st.markdown("""
 ---
-**使用说明与免责声明：**
-1. 本工具仅供学术研究参考，不作为最终临床诊断依据。
-2. 请确保输入的数据处于合理的临床生理范围内。
-3. 技术支持：基于 XGBoost 和 SHAP 解释引擎。
+**Disclaimer & Instructions:**
+1. This tool is intended for academic and research purposes only and should not be used as the sole basis for clinical diagnosis or treatment.
+2. Ensure all input values fall within clinically plausible ranges.
+3. Technical Support: Powered by XGBoost and SHAP (SHapley Additive exPlanations).
 """)
